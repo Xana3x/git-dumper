@@ -69,8 +69,8 @@ def get_indexed_files(response):
     return files
 
 
-def verify_response(response):
-    if response.status_code != 200:
+def verify_response(response, any_status=False):
+    if not any_status and response.status_code != 200:
         return (
             False,
             "[-] %s/%s responded with status code {code}\n".format(
@@ -221,7 +221,7 @@ def process_tasks(initial_tasks, worker, jobs, args=(), tasks_done=None):
 class DownloadWorker(Worker):
     """ Download a list of files """
 
-    def init(self, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None):
+    def init(self, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
         self.session = requests.Session()
         self.session.verify = False
         self.session.headers = http_headers
@@ -230,13 +230,14 @@ class DownloadWorker(Worker):
         else:
             self.session.mount(url, requests.adapters.HTTPAdapter(max_retries=retry))
 
-    def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None):
+    def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
         if os.path.isfile(os.path.join(directory, filepath)):
             printf("[-] Already downloaded %s/%s\n", url, filepath)
             return []
 
         with closing(
-            self.session.get(
+            self.session.request(
+                method,
                 "%s/%s" % (url, filepath),
                 allow_redirects=False,
                 stream=True,
@@ -250,7 +251,7 @@ class DownloadWorker(Worker):
                 response.status_code,
             )
 
-            valid, error_message = verify_response(response)
+            valid, error_message = verify_response(response, any_status)
             if not valid:
                 printf(error_message, url, filepath, file=sys.stderr)
                 return []
@@ -269,13 +270,14 @@ class DownloadWorker(Worker):
 class RecursiveDownloadWorker(DownloadWorker):
     """ Download a directory recursively """
 
-    def do_task(self, filepath, url, directory, retry, timeout, http_headers):
+    def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
         if os.path.isfile(os.path.join(directory, filepath)):
             printf("[-] Already downloaded %s/%s\n", url, filepath)
             return []
 
         with closing(
-            self.session.get(
+            self.session.request(
+                method,
                 "%s/%s" % (url, filepath),
                 allow_redirects=False,
                 stream=True,
@@ -304,7 +306,7 @@ class RecursiveDownloadWorker(DownloadWorker):
                     for filename in get_indexed_files(response)
                 ]
             else:  # file
-                valid, error_message = verify_response(response)
+                valid, error_message = verify_response(response, any_status)
                 if not valid:
                     printf(error_message, url, filepath, file=sys.stderr)
                     return []
@@ -323,15 +325,15 @@ class RecursiveDownloadWorker(DownloadWorker):
 class FindRefsWorker(DownloadWorker):
     """ Find refs/ """
 
-    def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None):
-        response = self.session.get(
-            "%s/%s" % (url, filepath), allow_redirects=False, timeout=timeout
+    def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
+        response = self.session.request(
+            method, "%s/%s" % (url, filepath), allow_redirects=False, timeout=timeout
         )
         printf(
             "[-] Fetching %s/%s [%d]\n", url, filepath, response.status_code
         )
 
-        valid, error_message = verify_response(response)
+        valid, error_message = verify_response(response, any_status)
         if not valid:
             printf(error_message, url, filepath, file=sys.stderr)
             return []
@@ -360,13 +362,14 @@ class FindRefsWorker(DownloadWorker):
 class FindObjectsWorker(DownloadWorker):
     """ Find objects """
 
-    def do_task(self, obj, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None):
+    def do_task(self, obj, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
         filepath = ".git/objects/%s/%s" % (obj[:2], obj[2:])
 
         if os.path.isfile(os.path.join(directory, filepath)):
             printf("[-] Already downloaded %s/%s\n", url, filepath)
         else:
-            response = self.session.get(
+            response = self.session.request(
+                method,
                 "%s/%s" % (url, filepath),
                 allow_redirects=False,
                 timeout=timeout,
@@ -378,7 +381,7 @@ class FindObjectsWorker(DownloadWorker):
                 response.status_code,
             )
 
-            valid, error_message = verify_response(response)
+            valid, error_message = verify_response(response, any_status)
             if not valid:
                 printf(error_message, url, filepath, file=sys.stderr)
                 return []
@@ -411,7 +414,7 @@ def sanitize_file(filepath):
             f.write(modified_content)
 
 
-def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None, client_cert_p12=None, client_cert_p12_password=None):
+def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
     """ Dump a git repository into the output directory """
 
     assert os.path.isdir(directory), "%s is not a directory" % directory
@@ -441,7 +444,8 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
     # check for /.git/HEAD
     try:
         printf("[-] Testing %s/.git/HEAD ", url)
-        response = session.get(
+        response = session.request(
+            method,
             "%s/.git/HEAD" % url,
             timeout=timeout,
             allow_redirects=False
@@ -452,7 +456,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
 
     printf("[%d]\n", response.status_code)
 
-    valid, error_message = verify_response(response)
+    valid, error_message = verify_response(response, any_status)
     if not valid:
         printf(error_message, url, "/.git/HEAD", file=sys.stderr)
         return 1
@@ -473,12 +477,12 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
 
     # check for directory listing
     printf("[-] Testing %s/.git/ ", url)
-    response = session.get("%s/.git/" % url, allow_redirects=False)
+    response = session.request(method, "%s/.git/" % url, allow_redirects=False)
     printf("[%d]\n", response.status_code)
 
 
     if (
-        response.status_code == 200
+        (response.status_code == 200 or any_status)
         and is_html(response)
         and "HEAD" in get_indexed_files(response)
     ):
@@ -487,7 +491,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
             [".git/", ".gitignore"],
             RecursiveDownloadWorker,
             jobs,
-            args=(url, directory, retry, timeout, http_headers),
+            args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password, method, any_status),
         )
 
         os.chdir(directory)
@@ -525,7 +529,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
         tasks,
         DownloadWorker,
         jobs,
-        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password),
+        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password, method, any_status),
     )
 
     # find refs
@@ -595,7 +599,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
         tasks,
         FindRefsWorker,
         jobs,
-        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password),
+        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password, method, any_status),
     )
 
     # find packs
@@ -618,7 +622,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
         tasks,
         DownloadWorker,
         jobs,
-        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password),
+        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password, method, any_status),
     )
 
     # find objects
@@ -658,10 +662,19 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
     # use .git/index to find objects
     index_path = os.path.join(directory, ".git", "index")
     if os.path.exists(index_path):
-        index = dulwich.index.Index(index_path)
+        # A corrupt/garbage index (e.g. an error page saved via --any-status)
+        # must not abort the whole dump; skip it and rely on other sources.
+        try:
+            index = dulwich.index.Index(index_path)
 
-        for entry in index.iterobjects():
-            objs.add(entry[1].decode())
+            for entry in index.iterobjects():
+                objs.add(entry[1].decode())
+        except Exception as e:
+            printf(
+                "[-] Skipping unparseable .git/index: %s\n",
+                e,
+                file=sys.stderr,
+            )
 
     # use packs to find more objects to fetch, and objects that are packed
     pack_file_dir = os.path.join(directory, ".git", "objects", "pack")
@@ -672,13 +685,23 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
                 pack_idx_path = os.path.join(
                     pack_file_dir, filename[:-5] + ".idx"
                 )
-                pack_data = dulwich.pack.PackData(pack_data_path, object_format=dulwich.object_format.DEFAULT_OBJECT_FORMAT)
-                pack_idx = dulwich.pack.load_pack_index(pack_idx_path, object_format=dulwich.object_format.DEFAULT_OBJECT_FORMAT)
-                pack = dulwich.pack.Pack.from_objects(pack_data, pack_idx)
+                # A corrupt pack/idx (e.g. an error page saved via --any-status)
+                # must not abort the dump; skip it and continue.
+                try:
+                    pack_data = dulwich.pack.PackData(pack_data_path, object_format=dulwich.object_format.DEFAULT_OBJECT_FORMAT)
+                    pack_idx = dulwich.pack.load_pack_index(pack_idx_path, object_format=dulwich.object_format.DEFAULT_OBJECT_FORMAT)
+                    pack = dulwich.pack.Pack.from_objects(pack_data, pack_idx)
 
-                for obj_file in pack.iterobjects():
-                    packed_objs.add(obj_file.sha().hexdigest())
-                    objs |= set(get_referenced_sha1(obj_file))
+                    for obj_file in pack.iterobjects():
+                        packed_objs.add(obj_file.sha().hexdigest())
+                        objs |= set(get_referenced_sha1(obj_file))
+                except Exception as e:
+                    printf(
+                        "[-] Skipping unparseable pack %s: %s\n",
+                        filename,
+                        e,
+                        file=sys.stderr,
+                    )
 
     # fetch all objects
     printf("[-] Fetching objects\n")
@@ -686,7 +709,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
         objs,
         FindObjectsWorker,
         jobs,
-        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password),
+        args=(url, directory, retry, timeout, http_headers, client_cert_p12, client_cert_p12_password, method, any_status),
         tasks_done=packed_objs,
     )
 
@@ -713,6 +736,19 @@ def main():
     parser.add_argument("url", metavar="URL", help="url")
     parser.add_argument("directory", metavar="DIR", help="output directory")
     parser.add_argument("--proxy", help="use the specified proxy")
+    parser.add_argument(
+        "-X",
+        "--method",
+        type=str,
+        default="GET",
+        help="HTTP method to use for all requests (e.g. GET, POST)",
+    )
+    parser.add_argument(
+        "--any-status",
+        action="store_true",
+        help="accept any HTTP status code as long as the body is non-empty "
+        "and not HTML (e.g. targets that return 500 but still serve content)",
+    )
     parser.add_argument("--client-cert-p12", help="client certificate in PKCS#12")
     parser.add_argument("--client-cert-p12-password", help="password for the client certificate")
     parser.add_argument(
@@ -758,6 +794,9 @@ def main():
         help="additional branch names to check for, e.g. `-b dev -b prod`. The default branches (`main`, `master`, `staging`, `production`, `development`) are always checked.",
     )
     args = parser.parse_args()
+
+    # method
+    args.method = args.method.upper()
 
     # jobs
     if args.jobs < 1:
@@ -840,6 +879,8 @@ def main():
             args.branches,
             args.client_cert_p12,
             args.client_cert_p12_password,
+            args.method,
+            args.any_status,
         )
     )
 

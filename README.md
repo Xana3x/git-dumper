@@ -34,6 +34,11 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   --proxy PROXY         use the specified proxy
+  -X METHOD, --method METHOD
+                        HTTP method to use for all requests (e.g. GET, POST)
+  --any-status          accept any HTTP status code as long as the body is
+                        non-empty and not HTML (e.g. targets that return 500
+                        but still serve content)
   -j JOBS, --jobs JOBS  number of simultaneous requests
   -r RETRY, --retry RETRY
                         number of request attempts before giving up
@@ -55,6 +60,18 @@ optional arguments:
 
 ```
 git-dumper http://website.com/.git ~/website
+```
+
+Some targets only serve the raw `.git` files over a non-`GET` method, or
+respond with a non-200 status (e.g. `500`) while still returning the real
+content. For those, combine `--method` and/or `--any-status`:
+
+```
+# Target that only serves clean content over POST
+git-dumper -X POST http://website.com/.git ~/website
+
+# Target that returns 500 (or other codes) but with real content
+git-dumper --any-status http://website.com/.git ~/website
 ```
 
 
