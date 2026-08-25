@@ -1,0 +1,16 @@
+# Run git-dumper in a container.
+#
+#   docker compose build
+#   docker compose run --rm git-dumper http://target/.git /dump
+#
+# The /dump directory is bind-mounted to ./dump on the host so the recovered
+# repository ends up on your machine. Pass any git-dumper flags after the
+# service name, e.g.:
+#
+#   docker compose run --rm git-dumper -X POST --any-status http://target/.git /dump
+services:
+  git-dumper:
+    build: .
+    image: git-dumper
+    volumes:
+      - ./dump:/dump
