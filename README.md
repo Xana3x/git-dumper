@@ -62,15 +62,27 @@ optional arguments:
 git-dumper http://website.com/.git ~/website
 ```
 
-Some targets only serve the raw `.git` files over a non-`GET` method, or
-respond with a non-200 status (e.g. `500`) while still returning the real
-content. For those, combine `--method` and/or `--any-status`:
+### Custom arguments
+
+Some targets don't serve the raw `.git` files in the usual way. The following
+arguments help with those cases.
+
+#### HTTP Method
+
+Some targets only serve the raw `.git` files over a non-`GET` method. Use
+`-X`/`--method` to change the HTTP method used for every request:
 
 ```
-# Target that only serves clean content over POST
 git-dumper -X POST http://website.com/.git ~/website
+```
 
-# Target that returns 500 (or other codes) but with real content
+#### Ignore HTTP status
+
+Some targets respond with a non-200 status (e.g. `500`) while still returning
+the real content. Use `--any-status` to accept any status code as long as the
+body is non-empty and not HTML:
+
+```
 git-dumper --any-status http://website.com/.git ~/website
 ```
 
