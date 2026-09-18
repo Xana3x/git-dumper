@@ -28,6 +28,77 @@ def printf(fmt, *args, file=sys.stdout):
     file.flush()
 
 
+def remote_file_url(url, filepath):
+    """Encode the remote .git path without changing the local output path."""
+    return "%s/%s" % (url, filepath.replace(".git/", ".g%69t/", 1))
+
+
+class CurlResponse:
+    def __init__(self, status_code, headers, body):
+        self.status_code = status_code
+        self.headers = headers
+        self.content = body
+
+    @property
+    def text(self):
+        return self.content.decode("utf-8", errors="replace")
+
+    def iter_content(self, chunk_size):
+        for offset in range(0, len(self.content), chunk_size):
+            yield self.content[offset : offset + chunk_size]
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+
+class CurlSession:
+    """HTTP client that preserves encoded .git paths on the wire."""
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+    def mount(self, *_args, **_kwargs):
+        pass
+
+    def request(self, method, url, allow_redirects=False, stream=False, timeout=None):
+        command = ["curl", "--path-as-is", "-sS", "-i", "-X", method]
+        if timeout:
+            command.extend(["--max-time", str(timeout)])
+        if allow_redirects:
+            command.append("-L")
+        for key, value in self.headers.items():
+            command.extend(["-H", "%s: %s" % (key, value)])
+        command.append(url)
+
+        result = subprocess.run(command, capture_output=True)
+        data = result.stdout
+        header_blob, separator, body = data.partition(b"\r\n\r\n")
+        if not separator:
+            header_blob, separator, body = data.partition(b"\n\n")
+
+        header_lines = header_blob.decode("iso-8859-1", errors="replace").splitlines()
+        status_code = 0
+        if header_lines:
+            status = header_lines[0].split()
+            if len(status) > 1 and status[1].isdigit():
+                status_code = int(status[1])
+
+        headers = {}
+        for line in header_lines[1:]:
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip()] = value.strip()
+
+        return CurlResponse(status_code, headers, body)
+
+
 def is_html(response):
     """ Return True if the response is a HTML webpage """
     return (
@@ -222,9 +293,7 @@ class DownloadWorker(Worker):
     """ Download a list of files """
 
     def init(self, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
-        self.session = requests.Session()
-        self.session.verify = False
-        self.session.headers = http_headers
+        self.session = CurlSession(http_headers)
         if client_cert_p12:
             self.session.mount(url, Pkcs12Adapter(pkcs12_filename=client_cert_p12, pkcs12_password=client_cert_p12_password))
         else:
@@ -238,7 +307,7 @@ class DownloadWorker(Worker):
         with closing(
             self.session.request(
                 method,
-                "%s/%s" % (url, filepath),
+                remote_file_url(url, filepath),
                 allow_redirects=False,
                 stream=True,
                 timeout=timeout,
@@ -278,7 +347,7 @@ class RecursiveDownloadWorker(DownloadWorker):
         with closing(
             self.session.request(
                 method,
-                "%s/%s" % (url, filepath),
+                remote_file_url(url, filepath),
                 allow_redirects=False,
                 stream=True,
                 timeout=timeout,
@@ -327,7 +396,7 @@ class FindRefsWorker(DownloadWorker):
 
     def do_task(self, filepath, url, directory, retry, timeout, http_headers, client_cert_p12=None, client_cert_p12_password=None, method="GET", any_status=False):
         response = self.session.request(
-            method, "%s/%s" % (url, filepath), allow_redirects=False, timeout=timeout
+            method, remote_file_url(url, filepath), allow_redirects=False, timeout=timeout
         )
         printf(
             "[-] Fetching %s/%s [%d]\n", url, filepath, response.status_code
@@ -370,7 +439,7 @@ class FindObjectsWorker(DownloadWorker):
         else:
             response = self.session.request(
                 method,
-                "%s/%s" % (url, filepath),
+                remote_file_url(url, filepath),
                 allow_redirects=False,
                 timeout=timeout,
             )
@@ -422,9 +491,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
     assert retry >= 1, "invalid number of retries"
     assert timeout >= 1, "invalid timeout"
 
-    session = requests.Session()
-    session.verify = False
-    session.headers = http_headers
+    session = CurlSession(http_headers)
     if client_cert_p12:
         session.mount(url, Pkcs12Adapter(pkcs12_filename=client_cert_p12, pkcs12_password=client_cert_p12_password))
     else:
@@ -446,7 +513,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
         printf("[-] Testing %s/.git/HEAD ", url)
         response = session.request(
             method,
-            "%s/.git/HEAD" % url,
+            "%s/.g%%69t/HEAD" % url,
             timeout=timeout,
             allow_redirects=False
         )
@@ -477,7 +544,7 @@ def fetch_git(url, directory, jobs, retry, timeout, http_headers, branches=None,
 
     # check for directory listing
     printf("[-] Testing %s/.git/ ", url)
-    response = session.request(method, "%s/.git/" % url, allow_redirects=False)
+    response = session.request(method, "%s/.g%%69t/" % url, allow_redirects=False)
     printf("[%d]\n", response.status_code)
 
 
